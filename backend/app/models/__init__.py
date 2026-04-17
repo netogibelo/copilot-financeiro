@@ -125,7 +125,8 @@ class Transaction(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     user: Mapped["User"] = relationship(back_populates="transactions")
-    account: Mapped["Account"] = relationship(back_populates="transactions", foreign_keys=[account_id])
+    account: Mapped["Account"] = relationship(back_populates="transactions", foreign_keys="[Transaction.account_id]")
+transfer_account: Mapped[Optional["Account"]] = relationship(foreign_keys="[Transaction.transfer_account_id]")
     category: Mapped[Optional["Category"]] = relationship(back_populates="transactions")
 
 
