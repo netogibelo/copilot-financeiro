@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
-    # OpenAI
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
+    # AI - Anthropic Claude
+    ANTHROPIC_API_KEY: Optional[str] = None
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
 
     # Google OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None
