@@ -180,13 +180,14 @@ DIRETRIZES:
     messages.append({"role": "user", "content": data.message})
 
     try:
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[{"role": "system", "content": system_prompt}] + messages,
-            max_tokens=1000,
+        response = await client.messages.create(
+            model=settings.ANTHROPIC_MODEL,
+            system=system_prompt,
+            messages=messages,
+            max_tokens=1024,
             temperature=0.7,
         )
-        assistant_message = response.choices[0].message.content
+        assistant_message = response.content[0].text
 
         messages.append({"role": "assistant", "content": assistant_message})
         conversation.messages = messages
@@ -241,7 +242,7 @@ async def get_conversation(
 
 
 def _get_mock_response(message: str) -> str:
-    """Mock response when OpenAI is not configured."""
+    """Mock response when Anthropic API key is not configured."""
     lower = message.lower()
     if "gasto" in lower or "gastando" in lower:
         return "📊 Analisando seus dados, seus maiores gastos este mês são: Alimentação (R$ 1.200), Transporte (R$ 450) e Assinaturas (R$ 280). Você está gastando 15% mais em alimentação comparado ao mês passado."
@@ -254,4 +255,4 @@ def _get_mock_response(message: str) -> str:
     elif "previsão" in lower or "futuro" in lower or "meses" in lower:
         return "🔮 Com base nos seus padrões atuais, em 3 meses: Receitas previstas: R$ 18.000 | Despesas previstas: R$ 14.400 | Saldo acumulado previsto: R$ 3.600. Atenção: se mantiver o crescimento de gastos em restaurantes (+23%/mês), o saldo pode ser R$ 800 menor."
     else:
-        return "Olá! Sou o seu Copilot Financeiro 🤖. Posso ajudar você a entender seus gastos, identificar economias, detectar padrões e fazer previsões financeiras. O que gostaria de saber? Configure a chave OpenAI para respostas personalizadas com seus dados reais."
+        return "Olá! Sou o seu Copilot Financeiro 🤖. Posso ajudar você a entender seus gastos, identificar economias, detectar padrões e fazer previsões financeiras. O que gostaria de saber? Configure a chave Anthropic para respostas personalizadas com seus dados reais."
