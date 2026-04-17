@@ -1,20 +1,22 @@
-// Copilot Financeiro - Frontend Config
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  output: "standalone",
-  experimental: {
-    missingSuspenseWithCSRBailout: false,
-  },
-  images: {
-    remotePatterns: [
-      { protocol: "https", hostname: "lh3.googleusercontent.com" },
-      { protocol: "https", hostname: "avatars.githubusercontent.com" },
-    ],
-  },
-  env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
-    NEXT_PUBLIC_GOOGLE_CLIENT_ID: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
-  },
+import type { Metadata } from "next";
+import "./globals.css";
+import { Providers } from "@/components/layout/Providers";
+
+export const metadata: Metadata = {
+  title: "Copilot Financeiro | Gestão Inteligente",
+  description: "Plataforma de gestão financeira pessoal com IA",
 };
 
-module.exports = nextConfig;
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="pt-BR" className="dark">
+      <body className="antialiased bg-surface-950 text-white">
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
