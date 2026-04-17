@@ -506,17 +506,27 @@ def _extract_tabular(doc) -> List[Dict]:
 
 def _parse_tabular_row(row_spans: List[Dict], current_year: Optional[int]) -> Optional[Dict]:
     """
-    Parse a single tabular row. Expected structure (C6 Bank):
-    [Data lanç.] [Data contáb.] [Tipo] [Descrição] [Valor]
+    Parse a single tabular row. Supports two cases:
+    1. Multiple spans (one per column)
+    2. Single span with all content concatenated (common when PyMuPDF merges columns)
     """
+    # Reconstruct full row text as fallback
+    full_text = " ".join(s["text"] for s in row_spans).strip()
+    if not full_text or len(full_text) < 5:
+        return None
+
+    # --- STRATEGY A: Try to extract from full_text using regex (handles concatenated spans) ---
+    txn = _parse_row_from_text(full_text, current_year)
+    if txn:
+        return txn
+
+    # --- STRATEGY B: Multi-span parsing (for well-separated columns) ---
     if len(row_spans) < 3:
         return None
 
-    # Extract date: first span that matches a date pattern
     t_date = None
     date_idx = None
 
-    # Try DD/MM/YYYY or DD/MM/YY first
     for i, span in enumerate(row_spans):
         d = _parse_date(span["text"])
         if d is not None:
@@ -524,7 +534,6 @@ def _parse_tabular_row(row_spans: List[Dict], current_year: Optional[int]) -> Op
             date_idx = i
             break
 
-    # If not found, try DD/MM (without year) - use current_year context
     if t_date is None and current_year is not None:
         for i, span in enumerate(row_spans):
             m = re.match(r"^(\d{1,2})[/\-.](\d{1,2})$", span["text"].strip())
@@ -541,13 +550,11 @@ def _parse_tabular_row(row_spans: List[Dict], current_year: Optional[int]) -> Op
     if t_date is None:
         return None
 
-    # Extract amount: last span that looks like money
     amount = None
     amount_idx = None
     for i in range(len(row_spans) - 1, -1, -1):
         span = row_spans[i]
         text = span["text"].strip()
-        # Must contain a comma+2digits (BR format)
         if re.search(r"\d[.,]\d{2}", text):
             a = _parse_amount(text)
             if a is not None and a != 0:
@@ -558,19 +565,15 @@ def _parse_tabular_row(row_spans: List[Dict], current_year: Optional[int]) -> Op
     if amount is None:
         return None
 
-    # Extract type and description (everything between date and amount)
-    # In C6 format: [date][date_contabil?][tipo][descricao][valor]
     middle_spans = []
     for i, span in enumerate(row_spans):
         if i == date_idx or i == amount_idx:
             continue
-        # Skip secondary date (data contábil)
         m = re.match(r"^(\d{1,2})[/\-.](\d{1,2})$", span["text"].strip())
         if m:
             continue
         middle_spans.append(span["text"].strip())
 
-    # Join middle parts (tipo + descrição)
     description = " ".join(middle_spans).strip()
     if not description:
         description = "Importado"
@@ -581,6 +584,89 @@ def _parse_tabular_row(row_spans: List[Dict], current_year: Optional[int]) -> Op
         "amount": abs(amount),
         "type": "receita" if amount > 0 else "despesa",
         "original_description": description,
+    }
+
+
+def _parse_row_from_text(text: str, current_year: Optional[int]) -> Optional[Dict]:
+    """
+    Parse a transaction from a single concatenated text line.
+    Expected pattern: DD/MM [DD/MM] TYPE DESCRIPTION [-]R$VALUE
+    Example: "05/01 05/01 Pagamento PGTO FAT CARTAO C6 -R$ 12.392,56"
+    """
+    if not text or len(text) < 10:
+        return None
+
+    # Find ALL dates in the text (DD/MM/YYYY, DD/MM/YY, or DD/MM)
+    date_matches = list(re.finditer(
+        r"\b(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2,4}))?\b",
+        text
+    ))
+
+    if not date_matches:
+        return None
+
+    # Use the FIRST date as the transaction date
+    first_date = date_matches[0]
+    day = int(first_date.group(1))
+    month = int(first_date.group(2))
+    year_part = first_date.group(3)
+
+    t_date = None
+    if year_part:
+        year = int(year_part)
+        if year < 100:  # YY format
+            year += 2000
+        try:
+            t_date = datetime(year, month, day).date()
+        except (ValueError, TypeError):
+            return None
+    elif current_year:
+        try:
+            t_date = datetime(current_year, month, day).date()
+        except (ValueError, TypeError):
+            return None
+
+    if t_date is None:
+        return None
+
+    # Find the amount - last occurrence of a BR-formatted number (with optional - and R$)
+    # Pattern: optional '-', optional 'R$', digits with comma decimal
+    amount_pattern = re.compile(
+        r"(-)?\s*R\$?\s*((?:\d{1,3}(?:[.\s]\d{3})*|\d+)[,]\d{2})",
+        re.IGNORECASE
+    )
+    amount_matches = list(amount_pattern.finditer(text))
+    if not amount_matches:
+        return None
+
+    last_match = amount_matches[-1]
+    sign = last_match.group(1) or ""
+    num_str = last_match.group(2)
+    amount_str = sign + num_str
+    amount = _parse_amount(amount_str)
+    if amount is None or amount == 0:
+        return None
+
+    # Description: text between the last date and the amount
+    # Remove all dates and the amount from the text
+    desc = text
+    # Remove all matched dates
+    for m in date_matches:
+        desc = desc.replace(m.group(0), "", 1)
+    # Remove the amount occurrence
+    desc = desc[:last_match.start()] + desc[last_match.end():]
+    # Clean up whitespace
+    desc = re.sub(r"\s+", " ", desc).strip()
+
+    if not desc:
+        desc = "Importado"
+
+    return {
+        "date": t_date,
+        "description": desc[:500],
+        "amount": abs(amount),
+        "type": "receita" if amount > 0 else "despesa",
+        "original_description": desc,
     }
 
 
