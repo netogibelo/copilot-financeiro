@@ -126,7 +126,7 @@ class Transaction(Base):
 
     user: Mapped["User"] = relationship(back_populates="transactions")
     account: Mapped["Account"] = relationship(back_populates="transactions", foreign_keys="[Transaction.account_id]")
-transfer_account: Mapped[Optional["Account"]] = relationship(foreign_keys="[Transaction.transfer_account_id]")
+    transfer_account: Mapped[Optional["Account"]] = relationship(foreign_keys="[Transaction.transfer_account_id]")
     category: Mapped[Optional["Category"]] = relationship(back_populates="transactions")
 
 
