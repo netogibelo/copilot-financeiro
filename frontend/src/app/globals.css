@@ -1,0 +1,160 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: 'Plus Jakarta Sans', sans-serif;
+  --sidebar-width: 260px;
+  --header-height: 64px;
+  --radius: 12px;
+  --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Green fintech palette */
+  --color-brand: #22c55e;
+  --color-brand-dark: #15803d;
+  --color-brand-glow: rgba(34, 197, 94, 0.15);
+  --color-surface: #111418;
+  --color-surface-1: #1a1d23;
+  --color-surface-2: #22262f;
+  --color-surface-3: #2a2f3a;
+  --color-border: rgba(255,255,255,0.06);
+  --color-border-active: rgba(34, 197, 94, 0.3);
+  --color-text: #e5e7eb;
+  --color-text-muted: #6b7280;
+  --color-danger: #f43f5e;
+  --color-warning: #f59e0b;
+  --color-success: #22c55e;
+  --color-info: #0ea5e9;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-display), 'Plus Jakarta Sans', sans-serif;
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-surface-3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-brand-dark); }
+
+/* Card base */
+.card {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.card:hover {
+  border-color: rgba(34, 197, 94, 0.15);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.05), 0 8px 32px rgba(0,0,0,0.3);
+}
+
+/* Shimmer loading */
+.shimmer {
+  background: linear-gradient(90deg, var(--color-surface-2) 25%, var(--color-surface-3) 50%, var(--color-surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Brand glow button */
+.btn-brand {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.25);
+  transition: all 0.2s;
+}
+.btn-brand:hover {
+  box-shadow: 0 0 32px rgba(34, 197, 94, 0.4);
+  transform: translateY(-1px);
+}
+
+/* Income / Expense colors */
+.text-income { color: #22c55e; }
+.text-expense { color: #f43f5e; }
+.text-investment { color: #8b5cf6; }
+.text-transfer { color: #6b7280; }
+
+/* Sidebar nav item */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--transition);
+  text-decoration: none;
+}
+.nav-item:hover {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+.nav-item.active {
+  background: var(--color-brand-glow);
+  color: var(--color-brand);
+  border: 1px solid var(--color-border-active);
+}
+
+/* Glass card */
+.glass {
+  background: rgba(26, 29, 35, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+}
+
+/* Number formatting */
+.number-display {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulseGreen {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+}
+
+.animate-fade-up { animation: fadeUp 0.4s ease-out forwards; }
+.animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
+
+/* Recharts overrides */
+.recharts-tooltip-wrapper { outline: none !important; }
+.recharts-default-tooltip {
+  background: var(--color-surface-2) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 8px !important;
+  color: var(--color-text) !important;
+}
