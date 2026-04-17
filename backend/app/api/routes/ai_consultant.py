@@ -126,7 +126,7 @@ async def chat(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not settings.OPENAI_API_KEY:
+    if not settings.ANTHROPIC_API_KEY:
         # Mock response for demo
         return {
             "response": _get_mock_response(data.message),
