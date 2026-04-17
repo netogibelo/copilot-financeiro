@@ -13,8 +13,18 @@ export function formatCurrency(value: number): string {
   }).format(value);
 }
 
-export function formatDate(dateStr: string | Date): string {
-  const d = typeof dateStr === "string" ? new Date(dateStr + "T00:00:00") : dateStr;
+function parseDate(dateStr: string | Date | null | undefined): Date | null {
+  if (!dateStr) return null;
+  if (dateStr instanceof Date) return isNaN(dateStr.getTime()) ? null : dateStr;
+  // If it already has time info (T, space, or timezone), parse directly
+  const hasTime = /[T\s]\d{2}:|Z|[+-]\d{2}:?\d{2}$/.test(dateStr);
+  const d = hasTime ? new Date(dateStr) : new Date(dateStr + "T00:00:00");
+  return isNaN(d.getTime()) ? null : d;
+}
+
+export function formatDate(dateStr: string | Date | null | undefined): string {
+  const d = parseDate(dateStr);
+  if (!d) return "-";
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
     month: "2-digit",
@@ -22,8 +32,9 @@ export function formatDate(dateStr: string | Date): string {
   }).format(d);
 }
 
-export function formatShortDate(dateStr: string | Date): string {
-  const d = typeof dateStr === "string" ? new Date(dateStr + "T00:00:00") : dateStr;
+export function formatShortDate(dateStr: string | Date | null | undefined): string {
+  const d = parseDate(dateStr);
+  if (!d) return "-";
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(d);
 }
 
