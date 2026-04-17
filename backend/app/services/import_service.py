@@ -137,14 +137,23 @@ def parse_xlsx(content: bytes, is_csv: bool = False) -> List[Dict]:
 
 
 def _read_csv_robust(content: bytes):
-    """Read CSV trying multiple encoding/separator combinations."""
+    """Read CSV trying multiple encoding/separator combinations.
+
+    Robust against:
+    - Brazilian encodings (utf-8, cp1252, latin-1)
+    - Multiple separators (comma, semicolon, tab, pipe)
+    - Preamble lines at the top (title, date range, blank lines)
+    - Quoted fields containing the separator
+    """
     import pandas as pd
 
     encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1"]
     separators = [",", ";", "\t", "|"]
 
+    # Decode once for all encodings; track the best result across them
     best_df = None
     best_cols = 0
+    best_rows = 0
 
     for enc in encodings:
         try:
@@ -153,29 +162,51 @@ def _read_csv_robust(content: bytes):
             continue
 
         for sep in separators:
-            try:
-                df = pd.read_csv(
-                    io.StringIO(text),
-                    header=None,
-                    sep=sep,
-                    engine="python",
-                    on_bad_lines="skip",
-                    dtype=str,
-                )
-                # Need at least 3 columns for a bank statement
-                if df.shape[1] >= 3 and df.shape[1] > best_cols:
-                    best_df = df
-                    best_cols = df.shape[1]
-            except Exception:
-                continue
+            # Try reading the full text, testing multiple skiprows values
+            # because bank CSVs often have a preamble (title, date range, blanks)
+            for skip in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+                try:
+                    df = pd.read_csv(
+                        io.StringIO(text),
+                        header=None,
+                        sep=sep,
+                        engine="python",
+                        on_bad_lines="skip",
+                        skiprows=skip,
+                        dtype=str,
+                        quotechar='"',
+                        skip_blank_lines=True,
+                    )
+                except Exception:
+                    continue
 
-        # If we already found a good one with this encoding, use it
-        if best_df is not None and best_cols >= 4:
-            logger.info(f"CSV parsed with encoding={enc}, best_cols={best_cols}")
-            return best_df
+                rows, cols = df.shape
+                # Bank statements need at least 3 columns and some rows
+                if cols < 3 or rows < 2:
+                    continue
+
+                # Score this attempt: prioritize more columns, then more rows
+                score = cols * 1000 + rows
+                best_score = best_cols * 1000 + best_rows
+                if score > best_score:
+                    best_df = df
+                    best_cols = cols
+                    best_rows = rows
+                    logger.info(
+                        f"CSV candidate: encoding={enc}, sep={repr(sep)}, "
+                        f"skiprows={skip}, shape=({rows}, {cols})"
+                    )
 
     if best_df is not None:
-        logger.info(f"CSV parsed (fallback) with best_cols={best_cols}")
+        logger.info(f"CSV parsed: final shape=({best_rows}, {best_cols})")
+    else:
+        # Log a sample of the content for debugging
+        try:
+            sample = content[:500].decode("utf-8", errors="replace")
+            logger.error(f"CSV parse: no valid combination found. First 500 bytes: {repr(sample)}")
+        except Exception:
+            logger.error(f"CSV parse: no valid combination found (could not decode sample)")
+
     return best_df
 
 
@@ -253,7 +284,29 @@ def _extract_from_dataframe(df_raw) -> List[Dict]:
             else:
                 tx_type = "receita" if amount > 0 else "despesa"
 
-            desc = str(row.get(desc_col) or "").strip() if desc_col else ""
+            # Description: prefer desc_col, fallback to titulo/type
+            desc = ""
+            if desc_col:
+                raw_desc = row.get(desc_col)
+                if raw_desc is not None and not (hasattr(pd, "isna") and pd.isna(raw_desc)):
+                    desc_str = str(raw_desc).strip()
+                    if desc_str and desc_str.lower() not in ("nan", "nat", "none"):
+                        desc = desc_str
+
+            # Fallback: try "titulo" or "tipo" columns if main description is empty
+            if not desc:
+                for fallback_pat in ["titulo", "título", "tipo", "historico", "histórico"]:
+                    for h in headers:
+                        if fallback_pat in h:
+                            fb_val = row.get(h)
+                            if fb_val is not None and not (hasattr(pd, "isna") and pd.isna(fb_val)):
+                                fb_str = str(fb_val).strip()
+                                if fb_str and fb_str.lower() not in ("nan", "nat", "none"):
+                                    desc = fb_str
+                                    break
+                    if desc:
+                        break
+
             if not desc:
                 desc = "Importado"
 
