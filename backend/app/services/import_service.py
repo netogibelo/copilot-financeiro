@@ -129,6 +129,7 @@ def _extract_from_dataframe(df_raw) -> List[Dict]:
 
     # Step 1: find the header row (row containing typical header keywords)
     header_row_idx = _find_header_row(df_raw)
+    logger.info(f"XLSX parse: header_row_idx={header_row_idx}, shape={df_raw.shape}")
 
     if header_row_idx is None:
         # No clear header — try treating each row as data and detect columns by content
@@ -148,9 +149,11 @@ def _extract_from_dataframe(df_raw) -> List[Dict]:
     debit_col = _match_col(headers, ["debito", "débito", "saida", "saída", "despesa"])
     type_col = _match_col(headers, ["tipo", "type", "natureza", "operação"])
 
+    logger.info(f"XLSX parse: headers={headers}, date_col={date_col}, desc_col={desc_col}, amount_col={amount_col}, credit_col={credit_col}, debit_col={debit_col}")
+
     if date_col is None:
         return _extract_by_content(df_raw)
-
+        
     transactions = []
     for _, row in df.iterrows():
         try:
