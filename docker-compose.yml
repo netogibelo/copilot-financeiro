@@ -1,0 +1,112 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: copilot_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-copilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-copilot_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-copilot_financeiro}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: copilot_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: copilot_backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD:-copilot_secret}@postgres:5432/${POSTGRES_DB:-copilot_financeiro}
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: ${SECRET_KEY:-super-secret-change-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/uploads
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: copilot_celery
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD:-copilot_secret}@postgres:5432/${POSTGRES_DB:-copilot_financeiro}
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: ${SECRET_KEY:-super-secret-change-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      - backend
+      - redis
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/uploads
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: copilot_beat
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD:-copilot_secret}@postgres:5432/${POSTGRES_DB:-copilot_financeiro}
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: ${SECRET_KEY:-super-secret-change-in-production}
+    depends_on:
+      - backend
+      - redis
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: copilot_frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  postgres_data:
+  uploads_data:
