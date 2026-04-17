@@ -48,6 +48,7 @@ app.add_middleware(
 )
 
 # Mount uploads directory
+os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Routers
