@@ -427,6 +427,7 @@ def _extract_tabular(doc) -> List[Dict]:
     current_year = None
 
     for page in doc:
+        logger.info(f"PDF tabular: processing page {page.number}")
         # Get text with position info
         page_dict = page.get_text("dict")
         if not page_dict or "blocks" not in page_dict:
@@ -472,6 +473,8 @@ def _extract_tabular(doc) -> List[Dict]:
         if current_row:
             rows.append(current_row)
 
+        logger.info(f"PDF tabular: page {page.number} has {len(spans)} spans grouped in {len(rows)} rows")
+
         # Process each row
         for row in rows:
             # Reconstruct the row text (for filtering and year detection)
@@ -494,6 +497,9 @@ def _extract_tabular(doc) -> List[Dict]:
             txn = _parse_tabular_row(row, current_year)
             if txn:
                 all_transactions.append(txn)
+            else:
+                # Log rejected rows for debugging (truncated)
+                logger.info(f"PDF tabular: row rejected (year={current_year}): {row_text[:100]}")
 
     return all_transactions
 
