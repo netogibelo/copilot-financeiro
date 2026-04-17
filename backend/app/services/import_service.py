@@ -228,9 +228,27 @@ def _find_header_row(df_raw) -> Optional[int]:
 
 
 def _match_col(headers: List[str], patterns: List[str]) -> Optional[str]:
-    """Find first column header matching any pattern."""
-    for h in headers:
-        for pat in patterns:
+    """Find best column header matching any pattern. Prefers exact/prefix match over substring."""
+    # Priority 1: exact match (case-insensitive, after strip)
+    for pat in patterns:
+        for h in headers:
+            if h == pat:
+                return h
+    # Priority 2: starts with pattern
+    for pat in patterns:
+        for h in headers:
+            if h.startswith(pat):
+                return h
+    # Priority 3: pattern is a whole word in the header (not part of another word)
+    for pat in patterns:
+        for h in headers:
+            # Split by common separators and check word match
+            words = re.split(r"[\s\(\)/\-_.]+", h)
+            if pat in words:
+                return h
+    # Priority 4: substring (last resort)
+    for pat in patterns:
+        for h in headers:
             if pat in h:
                 return h
     return None
