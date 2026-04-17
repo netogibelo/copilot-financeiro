@@ -96,7 +96,87 @@ def parse_ofx(content: bytes) -> List[Dict]:
 # XLSX PARSER
 # =====================================================
 
+def parse_xlsx(content: bytes, is_csv: bool = False) -> List[Dict]:
+    """Parse Excel/CSV bank statement (robust: multi-sheet, header detection, multiple bank formats)."""
+    try:
+        import pandas as pd
 
+        all_sheets = {}
+
+        if is_csv:
+            # CSV: try multiple encodings and separators (Brazilian CSVs use ; and cp1252)
+            df_csv = _read_csv_robust(content)
+            if df_csv is not None:
+                all_sheets = {"Sheet1": df_csv}
+            else:
+                logger.error("CSV parse: could not read file with any encoding/separator")
+                return []
+        else:
+            # XLSX: read all sheets
+            try:
+                all_sheets = pd.read_excel(io.BytesIO(content), header=None, sheet_name=None)
+            except Exception as e:
+                logger.error(f"XLSX read error: {e}")
+                # Last resort: try as CSV
+                df_csv = _read_csv_robust(content)
+                if df_csv is not None:
+                    all_sheets = {"Sheet1": df_csv}
+                else:
+                    return []
+
+        all_transactions = []
+        for sheet_name, df_raw in all_sheets.items():
+            transactions = _extract_from_dataframe(df_raw)
+            logger.info(f"Parse sheet '{sheet_name}': extracted {len(transactions)} transactions")
+            all_transactions.extend(transactions)
+
+        return all_transactions
+    except Exception as e:
+        logger.error(f"XLSX/CSV parse error: {e}")
+        return []
+
+
+def _read_csv_robust(content: bytes):
+    """Read CSV trying multiple encoding/separator combinations."""
+    import pandas as pd
+
+    encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1"]
+    separators = [",", ";", "\t", "|"]
+
+    best_df = None
+    best_cols = 0
+
+    for enc in encodings:
+        try:
+            text = content.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+        for sep in separators:
+            try:
+                df = pd.read_csv(
+                    io.StringIO(text),
+                    header=None,
+                    sep=sep,
+                    engine="python",
+                    on_bad_lines="skip",
+                    dtype=str,
+                )
+                # Need at least 3 columns for a bank statement
+                if df.shape[1] >= 3 and df.shape[1] > best_cols:
+                    best_df = df
+                    best_cols = df.shape[1]
+            except Exception:
+                continue
+
+        # If we already found a good one with this encoding, use it
+        if best_df is not None and best_cols >= 4:
+            logger.info(f"CSV parsed with encoding={enc}, best_cols={best_cols}")
+            return best_df
+
+    if best_df is not None:
+        logger.info(f"CSV parsed (fallback) with best_cols={best_cols}")
+    return best_df
 
 
 def _extract_from_dataframe(df_raw) -> List[Dict]:
