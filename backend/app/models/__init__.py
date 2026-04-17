@@ -2,10 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import (
-    String, Boolean, DateTime, Numeric, Integer, Date,
-    ForeignKey, Text, ARRAY, func, Enum as SAEnum
-)
+from sqlalchemy import String, Boolean, DateTime, Numeric, Integer, Date, ForeignKey, Text, ARRAY, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB, INET
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,10 +12,6 @@ from app.core.database import Base
 def gen_uuid():
     return str(uuid.uuid4())
 
-
-# =====================================================
-# USER
-# =====================================================
 
 class User(Base):
     __tablename__ = "users"
@@ -41,14 +34,10 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    accounts: Mapped[List["Account"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    transactions: Mapped[List["Transaction"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    accounts: Mapped[List["Account"]] = relationship(back_populates="user", cascade="all, delete-orphan", foreign_keys="[Account.user_id]")
+    transactions: Mapped[List["Transaction"]] = relationship(back_populates="user", cascade="all, delete-orphan", foreign_keys="[Transaction.user_id]")
     categories: Mapped[List["Category"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
-
-# =====================================================
-# ACCOUNT
-# =====================================================
 
 class Account(Base):
     __tablename__ = "accounts"
@@ -69,13 +58,9 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user: Mapped["User"] = relationship(back_populates="accounts")
-    transactions: Mapped[List["Transaction"]] = relationship(back_populates="account")
+    user: Mapped["User"] = relationship(back_populates="accounts", foreign_keys=[user_id])
+    transactions: Mapped[List["Transaction"]] = relationship(back_populates="account", foreign_keys="[Transaction.account_id]")
 
-
-# =====================================================
-# CATEGORY
-# =====================================================
 
 class Category(Base):
     __tablename__ = "categories"
@@ -94,10 +79,6 @@ class Category(Base):
     user: Mapped[Optional["User"]] = relationship(back_populates="categories")
     transactions: Mapped[List["Transaction"]] = relationship(back_populates="category")
 
-
-# =====================================================
-# TRANSACTION
-# =====================================================
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -124,15 +105,11 @@ class Transaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user: Mapped["User"] = relationship(back_populates="transactions")
-    account: Mapped["Account"] = relationship(back_populates="transactions", foreign_keys="[Transaction.account_id]")
-    transfer_account: Mapped[Optional["Account"]] = relationship(foreign_keys="[Transaction.transfer_account_id]")
+    user: Mapped["User"] = relationship(back_populates="transactions", foreign_keys=[user_id])
+    account: Mapped["Account"] = relationship(back_populates="transactions", foreign_keys=[account_id])
+    transfer_account: Mapped[Optional["Account"]] = relationship(foreign_keys=[transfer_account_id])
     category: Mapped[Optional["Category"]] = relationship(back_populates="transactions")
 
-
-# =====================================================
-# CATEGORY LEARNING
-# =====================================================
 
 class CategoryLearning(Base):
     __tablename__ = "category_learning"
@@ -147,10 +124,6 @@ class CategoryLearning(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-
-# =====================================================
-# SUBSCRIPTIONS
-# =====================================================
 
 class SubscriptionDetected(Base):
     __tablename__ = "subscriptions_detected"
@@ -170,10 +143,6 @@ class SubscriptionDetected(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-
-# =====================================================
-# INSTALLMENTS
-# =====================================================
 
 class InstallmentDetected(Base):
     __tablename__ = "installments_detected"
@@ -195,10 +164,6 @@ class InstallmentDetected(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
-# =====================================================
-# AI CONVERSATIONS
-# =====================================================
-
 class AIConversation(Base):
     __tablename__ = "ai_conversations"
 
@@ -209,10 +174,6 @@ class AIConversation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-
-# =====================================================
-# AUDIT LOGS
-# =====================================================
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -227,10 +188,6 @@ class AuditLog(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(INET)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-
-# =====================================================
-# IMPORTS
-# =====================================================
 
 class Import(Base):
     __tablename__ = "imports"
@@ -249,10 +206,6 @@ class Import(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-
-# =====================================================
-# CASHFLOW PREDICTIONS
-# =====================================================
 
 class CashflowPrediction(Base):
     __tablename__ = "cashflow_predictions"
