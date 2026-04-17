@@ -131,8 +131,8 @@ async def predict_cashflow(
         if running_balance < 0 and negative_day is None:
             negative_day = day_offset
         
-        projections.append({
-            "date": date_key.isoformat(),
+       projections.append({
+            "date": date_key,
             "projected_income": round(daily_income, 2),
             "projected_expense": round(daily_expense, 2),
             "projected_balance": round(running_balance, 2),
