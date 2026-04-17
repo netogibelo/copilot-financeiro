@@ -133,8 +133,8 @@ async def chat(
             "conversation_id": data.conversation_id or "demo",
         }
 
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    from anthropic import AsyncAnthropic
+    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     # Load or create conversation
     conversation = None
