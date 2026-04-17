@@ -62,7 +62,7 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.models.user import User
+    from app.models import User
 
     payload = decode_token(credentials.credentials)
     user_id = payload.get("sub")
