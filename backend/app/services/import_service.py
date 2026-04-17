@@ -21,22 +21,71 @@ from loguru import logger
 # =====================================================
 
 def parse_ofx(content: bytes) -> List[Dict]:
-    """Parse OFX/OFC bank statement."""
+    """Parse OFX/OFC bank statement using regex (no external dependency)."""
     try:
-        import ofxparse
-        from io import StringIO
-        text = content.decode("utf-8", errors="replace")
-        ofx = ofxparse.OfxParser.parse(StringIO(text))
+        # Try multiple encodings (OFX BR files are often in cp1252 or latin-1)
+        text = None
+        for encoding in ("utf-8", "cp1252", "latin-1", "iso-8859-1"):
+            try:
+                text = content.decode(encoding)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if text is None:
+            text = content.decode("utf-8", errors="replace")
+
+        # Extract each transaction block
+        # OFX format: <STMTTRN> ... </STMTTRN> (or without closing tags in legacy)
         transactions = []
-        for account in ofx.accounts:
-            for t in account.statement.transactions:
-                transactions.append({
-                    "date": t.date.date() if hasattr(t.date, "date") else t.date,
-                    "description": str(t.memo or t.payee or "Sem descrição").strip(),
-                    "amount": abs(float(t.amount)),
-                    "type": "receita" if float(t.amount) > 0 else "despesa",
-                    "original_description": str(t.id or ""),
-                })
+        # Match from <STMTTRN> to the next <STMTTRN> or </BANKTRANLIST>
+        txn_blocks = re.findall(
+            r"<STMTTRN>(.*?)(?=<STMTTRN>|</BANKTRANLIST>|</STMTRS>|</CREDITCARDMSGSRSV1>|$)",
+            text,
+            re.DOTALL | re.IGNORECASE,
+        )
+
+        for block in txn_blocks:
+            # Extract fields using regex (works for both closed and unclosed tags)
+            def get_tag(tag):
+                m = re.search(rf"<{tag}>([^<\r\n]+)", block, re.IGNORECASE)
+                return m.group(1).strip() if m else None
+
+            dt_posted = get_tag("DTPOSTED")
+            trn_amount = get_tag("TRNAMT")
+            memo = get_tag("MEMO") or ""
+            payee = get_tag("NAME") or ""
+            fitid = get_tag("FITID") or ""
+            trn_type = get_tag("TRNTYPE") or ""
+
+            if not dt_posted or not trn_amount:
+                continue
+
+            # Parse date: OFX dates are usually YYYYMMDD or YYYYMMDDHHMMSS
+            date_str = dt_posted[:8]  # Take first 8 chars (YYYYMMDD)
+            try:
+                t_date = datetime.strptime(date_str, "%Y%m%d").date()
+            except ValueError:
+                continue
+
+            # Parse amount
+            try:
+                amount = float(trn_amount.replace(",", "."))
+            except ValueError:
+                continue
+
+            # Build description (prefer memo, fallback to payee or trntype)
+            description = (memo or payee or trn_type or "Sem descrição").strip()
+            if not description:
+                description = "Importado"
+
+            transactions.append({
+                "date": t_date,
+                "description": description[:500],
+                "amount": abs(amount),
+                "type": "receita" if amount > 0 else "despesa",
+                "original_description": fitid or description,
+            })
+
         return transactions
     except Exception as e:
         logger.error(f"OFX parse error: {e}")
