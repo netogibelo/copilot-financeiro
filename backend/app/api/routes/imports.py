@@ -103,7 +103,7 @@ async def upload_file(
                     Transaction.description == t_data["description"],
                 )
             )
-            if existing.scalar_one_or_none():
+            if existing.scalars().first():
                 duplicates += 1
                 continue
 
