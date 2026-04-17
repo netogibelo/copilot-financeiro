@@ -359,15 +359,20 @@ def parse_pdf(content: bytes) -> List[Dict]:
         import fitz  # PyMuPDF
         doc = fitz.open(stream=content, filetype="pdf")
 
-        # Strategy 1: Extract as blocks (preserves layout - better for tabular statements)
+        # Strategy 1 (BEST for tabular bank statements like C6 Bank):
+        # Use text positioning to group words into rows of a table
+        tabular_transactions = _extract_tabular(doc)
+        if tabular_transactions:
+            logger.info(f"PDF parse: extracted {len(tabular_transactions)} transactions via tabular strategy")
+            return tabular_transactions
+
+        # Strategy 2: Extract as blocks (preserves layout)
         block_transactions = []
         full_text = ""
         for page in doc:
             full_text += page.get_text() + "\n"
-            # Get blocks: each block is a paragraph/cell in the layout
             blocks = page.get_text("blocks")
             for block in blocks:
-                # block = (x0, y0, x1, y1, text, block_no, block_type)
                 block_text = block[4] if len(block) > 4 else ""
                 parsed = _extract_from_block(block_text)
                 if parsed:
@@ -377,13 +382,13 @@ def parse_pdf(content: bytes) -> List[Dict]:
             logger.info(f"PDF parse: extracted {len(block_transactions)} transactions via blocks strategy")
             return block_transactions
 
-        # Strategy 2: Multi-line extraction (date on one line, amount on nearby line)
+        # Strategy 3: Multi-line extraction
         multiline_transactions = _extract_multiline_transactions(full_text)
         if multiline_transactions:
             logger.info(f"PDF parse: extracted {len(multiline_transactions)} transactions via multiline strategy")
             return multiline_transactions
 
-        # Strategy 3: Original single-line extraction (for PDFs with tabular text)
+        # Strategy 4: Single-line extraction (fallback)
         single_line = _extract_transactions_from_text(full_text)
         logger.info(f"PDF parse: extracted {len(single_line)} transactions via single-line strategy")
         return single_line
@@ -391,6 +396,186 @@ def parse_pdf(content: bytes) -> List[Dict]:
     except Exception as e:
         logger.error(f"PDF parse error: {e}")
         return []
+
+
+# Month names in Portuguese (for extracting year from section headers)
+_MONTHS_PT = {
+    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3, "abril": 4,
+    "maio": 5, "junho": 6, "julho": 7, "agosto": 8, "setembro": 9,
+    "outubro": 10, "novembro": 11, "dezembro": 12,
+}
+
+# Keywords that indicate a row is NOT a transaction (subtotals, headers)
+_SKIP_KEYWORDS = [
+    "saldo do dia", "saldo anterior", "saldo final", "saldo inicial",
+    "total do período", "total do periodo",
+    "entradas:", "saídas:", "saidas:",
+    "cheque especial",
+    "período", "periodo",
+    "extrato",
+    "data lançamento", "data lancamento", "data contábil", "data contabil",
+]
+
+
+def _extract_tabular(doc) -> List[Dict]:
+    """
+    Extract transactions from a PDF with tabular layout.
+    Groups text fragments by Y coordinate to reconstruct table rows.
+    Detects year context from section headers like "Janeiro 2026".
+    """
+    all_transactions = []
+    current_year = None
+
+    for page in doc:
+        # Get text with position info
+        page_dict = page.get_text("dict")
+        if not page_dict or "blocks" not in page_dict:
+            continue
+
+        # Collect all text spans with their positions
+        spans = []
+        for block in page_dict["blocks"]:
+            if block.get("type") != 0:  # 0 = text block
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    text = span.get("text", "").strip()
+                    if not text:
+                        continue
+                    bbox = span.get("bbox", [0, 0, 0, 0])
+                    spans.append({
+                        "text": text,
+                        "x": bbox[0],
+                        "y": bbox[1],
+                        "x_end": bbox[2],
+                    })
+
+        # Sort by Y (top to bottom), then X (left to right)
+        spans.sort(key=lambda s: (round(s["y"], 1), s["x"]))
+
+        # Group spans into rows (same Y within tolerance)
+        rows = []
+        current_row = []
+        current_y = None
+        Y_TOLERANCE = 3  # pixels
+
+        for span in spans:
+            if current_y is None or abs(span["y"] - current_y) <= Y_TOLERANCE:
+                current_row.append(span)
+                if current_y is None:
+                    current_y = span["y"]
+            else:
+                if current_row:
+                    rows.append(current_row)
+                current_row = [span]
+                current_y = span["y"]
+        if current_row:
+            rows.append(current_row)
+
+        # Process each row
+        for row in rows:
+            # Reconstruct the row text (for filtering and year detection)
+            row.sort(key=lambda s: s["x"])
+            row_text = " ".join(s["text"] for s in row)
+            row_text_lower = row_text.lower()
+
+            # Detect year/month context (e.g., "Janeiro 2026")
+            year_match = re.search(r"(\w+)\s+(\d{4})", row_text_lower)
+            if year_match and year_match.group(1) in _MONTHS_PT:
+                current_year = int(year_match.group(2))
+                # Don't process this row as transaction
+                continue
+
+            # Skip non-transaction rows
+            if any(kw in row_text_lower for kw in _SKIP_KEYWORDS):
+                continue
+
+            # Try to extract transaction from row
+            txn = _parse_tabular_row(row, current_year)
+            if txn:
+                all_transactions.append(txn)
+
+    return all_transactions
+
+
+def _parse_tabular_row(row_spans: List[Dict], current_year: Optional[int]) -> Optional[Dict]:
+    """
+    Parse a single tabular row. Expected structure (C6 Bank):
+    [Data lanç.] [Data contáb.] [Tipo] [Descrição] [Valor]
+    """
+    if len(row_spans) < 3:
+        return None
+
+    # Extract date: first span that matches a date pattern
+    t_date = None
+    date_idx = None
+
+    # Try DD/MM/YYYY or DD/MM/YY first
+    for i, span in enumerate(row_spans):
+        d = _parse_date(span["text"])
+        if d is not None:
+            t_date = d
+            date_idx = i
+            break
+
+    # If not found, try DD/MM (without year) - use current_year context
+    if t_date is None and current_year is not None:
+        for i, span in enumerate(row_spans):
+            m = re.match(r"^(\d{1,2})[/\-.](\d{1,2})$", span["text"].strip())
+            if m:
+                try:
+                    day = int(m.group(1))
+                    month = int(m.group(2))
+                    t_date = datetime(current_year, month, day).date()
+                    date_idx = i
+                    break
+                except (ValueError, TypeError):
+                    continue
+
+    if t_date is None:
+        return None
+
+    # Extract amount: last span that looks like money
+    amount = None
+    amount_idx = None
+    for i in range(len(row_spans) - 1, -1, -1):
+        span = row_spans[i]
+        text = span["text"].strip()
+        # Must contain a comma+2digits (BR format)
+        if re.search(r"\d[.,]\d{2}", text):
+            a = _parse_amount(text)
+            if a is not None and a != 0:
+                amount = a
+                amount_idx = i
+                break
+
+    if amount is None:
+        return None
+
+    # Extract type and description (everything between date and amount)
+    # In C6 format: [date][date_contabil?][tipo][descricao][valor]
+    middle_spans = []
+    for i, span in enumerate(row_spans):
+        if i == date_idx or i == amount_idx:
+            continue
+        # Skip secondary date (data contábil)
+        m = re.match(r"^(\d{1,2})[/\-.](\d{1,2})$", span["text"].strip())
+        if m:
+            continue
+        middle_spans.append(span["text"].strip())
+
+    # Join middle parts (tipo + descrição)
+    description = " ".join(middle_spans).strip()
+    if not description:
+        description = "Importado"
+
+    return {
+        "date": t_date,
+        "description": description[:500],
+        "amount": abs(amount),
+        "type": "receita" if amount > 0 else "despesa",
+        "original_description": description,
+    }
 
 
 def _extract_from_block(block_text: str) -> Optional[Dict]:
