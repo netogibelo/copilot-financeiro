@@ -97,85 +97,235 @@ def parse_ofx(content: bytes) -> List[Dict]:
 # =====================================================
 
 def parse_xlsx(content: bytes) -> List[Dict]:
-    """Parse Excel bank statement."""
+    """Parse Excel/CSV bank statement (robust: multi-sheet, header detection, multiple bank formats)."""
     try:
         import pandas as pd
-        df = pd.read_excel(io.BytesIO(content), header=None)
 
-        transactions = []
-        date_col = amount_col = desc_col = None
+        # Try reading all sheets (for XLSX); CSV reads as single DF
+        try:
+            all_sheets = pd.read_excel(io.BytesIO(content), header=None, sheet_name=None)
+        except Exception:
+            # Fallback: maybe CSV
+            all_sheets = {"Sheet1": pd.read_csv(io.BytesIO(content), header=None, sep=None, engine="python", encoding_errors="replace")}
 
-        # Auto-detect columns
-        for col in df.columns:
-            sample = df[col].dropna().head(20)
-            for val in sample:
-                val_str = str(val)
-                # Date detection
-                if date_col is None and re.match(r"\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}", val_str):
-                    date_col = col
-                    break
-                # Amount detection
-                if amount_col is None and re.match(r"-?\d+[\.,]\d{2}", val_str.replace("R$", "").strip()):
-                    amount_col = col
-                    break
+        all_transactions = []
 
-        if date_col is None or amount_col is None:
-            # Try with header row
-            df = pd.read_excel(io.BytesIO(content))
-            for col in df.columns:
-                col_lower = str(col).lower()
-                if date_col is None and any(k in col_lower for k in ["data", "date", "dt"]):
-                    date_col = col
-                if desc_col is None and any(k in col_lower for k in ["descricao", "descrição", "historico", "memo", "pagamento"]):
-                    desc_col = col
-                if amount_col is None and any(k in col_lower for k in ["valor", "amount", "credito", "debito", "lancamento"]):
-                    amount_col = col
+        for sheet_name, df_raw in all_sheets.items():
+            transactions = _extract_from_dataframe(df_raw)
+            all_transactions.extend(transactions)
 
-        for _, row in df.iterrows():
-            try:
-                raw_date = row.get(date_col) if date_col else None
-                raw_amount = row.get(amount_col) if amount_col else None
-                raw_desc = row.get(desc_col) if desc_col else "Importado"
-
-                if raw_date is None or raw_amount is None:
-                    continue
-
-                # Parse date
-                t_date = None
-                if isinstance(raw_date, datetime):
-                    t_date = raw_date.date()
-                elif isinstance(raw_date, str):
-                    for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"]:
-                        try:
-                            t_date = datetime.strptime(raw_date.strip(), fmt).date()
-                            break
-                        except:
-                            pass
-
-                if t_date is None:
-                    continue
-
-                # Parse amount
-                amount_str = str(raw_amount).replace("R$", "").replace(".", "").replace(",", ".").strip()
-                try:
-                    amount = float(amount_str)
-                except:
-                    continue
-
-                transactions.append({
-                    "date": t_date,
-                    "description": str(raw_desc).strip()[:500],
-                    "amount": abs(amount),
-                    "type": "receita" if amount > 0 else "despesa",
-                    "original_description": str(raw_desc).strip(),
-                })
-            except Exception:
-                continue
-
-        return transactions
+        return all_transactions
     except Exception as e:
         logger.error(f"XLSX parse error: {e}")
         return []
+
+
+def _extract_from_dataframe(df_raw) -> List[Dict]:
+    """Extract transactions from a single DataFrame by auto-detecting header row and columns."""
+    import pandas as pd
+
+    if df_raw.empty:
+        return []
+
+    # Step 1: find the header row (row containing typical header keywords)
+    header_row_idx = _find_header_row(df_raw)
+
+    if header_row_idx is None:
+        # No clear header — try treating each row as data and detect columns by content
+        return _extract_by_content(df_raw)
+
+    # Use that row as header
+    headers = [str(v).strip().lower() if pd.notna(v) else f"col{i}" for i, v in enumerate(df_raw.iloc[header_row_idx])]
+    df = df_raw.iloc[header_row_idx + 1:].copy()
+    df.columns = headers
+    df = df.reset_index(drop=True)
+
+    # Step 2: identify columns semantically
+    date_col = _match_col(headers, ["data", "date", "dt ", "dt.", "dtposted", "data lancamento", "data lançamento", "data movimento"])
+    desc_col = _match_col(headers, ["descri", "histor", "memo", "pagamento", "estabelecimento", "detalhe", "lancamento", "lançamento", "operaç", "operacao"])
+    amount_col = _match_col(headers, ["valor", "amount", "montante", "quantia"])
+    credit_col = _match_col(headers, ["credito", "crédito", "entrada", "receita"])
+    debit_col = _match_col(headers, ["debito", "débito", "saida", "saída", "despesa"])
+    type_col = _match_col(headers, ["tipo", "type", "natureza", "operação"])
+
+    if date_col is None:
+        return _extract_by_content(df_raw)
+
+    transactions = []
+    for _, row in df.iterrows():
+        try:
+            raw_date = row.get(date_col)
+            if raw_date is None or (hasattr(pd, "isna") and pd.isna(raw_date)):
+                continue
+
+            t_date = _parse_date(raw_date)
+            if t_date is None:
+                continue
+
+            # Amount: single column or credit/debit split
+            amount = None
+            if amount_col:
+                amount = _parse_amount(row.get(amount_col))
+            elif credit_col or debit_col:
+                credit = _parse_amount(row.get(credit_col)) if credit_col else 0
+                debit = _parse_amount(row.get(debit_col)) if debit_col else 0
+                credit = credit if credit else 0
+                debit = debit if debit else 0
+                if credit and credit != 0:
+                    amount = abs(credit)
+                elif debit and debit != 0:
+                    amount = -abs(debit)
+
+            if amount is None or amount == 0:
+                continue
+
+            # Type: use explicit column if available, otherwise sign
+            if type_col:
+                type_val = str(row.get(type_col) or "").lower()
+                if any(k in type_val for k in ["cred", "receita", "entrada"]):
+                    tx_type = "receita"
+                elif any(k in type_val for k in ["deb", "despesa", "saida", "saída"]):
+                    tx_type = "despesa"
+                else:
+                    tx_type = "receita" if amount > 0 else "despesa"
+            else:
+                tx_type = "receita" if amount > 0 else "despesa"
+
+            desc = str(row.get(desc_col) or "").strip() if desc_col else ""
+            if not desc:
+                desc = "Importado"
+
+            transactions.append({
+                "date": t_date,
+                "description": desc[:500],
+                "amount": abs(amount),
+                "type": tx_type,
+                "original_description": desc,
+            })
+        except Exception:
+            continue
+
+    return transactions
+
+
+def _find_header_row(df_raw) -> Optional[int]:
+    """Find the first row that looks like a header (contains typical bank statement keywords)."""
+    import pandas as pd
+
+    keywords = ["data", "date", "valor", "amount", "descri", "histor", "credito", "debito", "lancamento", "lançamento"]
+    max_rows_to_check = min(20, len(df_raw))
+
+    for i in range(max_rows_to_check):
+        row = df_raw.iloc[i]
+        row_str = " ".join(str(v).lower() for v in row if pd.notna(v))
+        matches = sum(1 for kw in keywords if kw in row_str)
+        if matches >= 2:  # At least 2 header keywords in same row
+            return i
+    return None
+
+
+def _match_col(headers: List[str], patterns: List[str]) -> Optional[str]:
+    """Find first column header matching any pattern."""
+    for h in headers:
+        for pat in patterns:
+            if pat in h:
+                return h
+    return None
+
+
+def _parse_date(raw):
+    """Parse a date value from various formats."""
+    import pandas as pd
+
+    if raw is None or (hasattr(pd, "isna") and pd.isna(raw)):
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if hasattr(raw, "date") and callable(raw.date):
+        try:
+            return raw.date()
+        except Exception:
+            pass
+    s = str(raw).strip()
+    if not s or s.lower() in ("nan", "nat", "none"):
+        return None
+    # Try ISO first (common in OFX export)
+    for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%Y/%m/%d", "%d/%m/%y"]:
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_amount(raw):
+    """Parse a monetary amount from various formats (BR/US)."""
+    import pandas as pd
+
+    if raw is None or (hasattr(pd, "isna") and pd.isna(raw)):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip()
+    if not s or s.lower() in ("nan", "none", "-"):
+        return None
+    # Clean: remove R$, spaces, dots as thousand sep; keep comma as decimal
+    s = s.replace("R$", "").replace(" ", "").strip()
+    # If has both . and , use , as decimal
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    # Handle parenthesis as negative
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _extract_by_content(df_raw) -> List[Dict]:
+    """Fallback: scan each row and try to extract [date + amount + desc] pattern."""
+    import pandas as pd
+
+    transactions = []
+    for _, row in df_raw.iterrows():
+        values = [str(v).strip() for v in row if pd.notna(v)]
+        if not values:
+            continue
+
+        row_date = None
+        row_amount = None
+        row_desc_parts = []
+
+        for val in values:
+            if row_date is None:
+                d = _parse_date(val)
+                if d is not None:
+                    row_date = d
+                    continue
+            if row_amount is None:
+                a = _parse_amount(val)
+                if a is not None and a != 0 and not (val.replace(".", "").replace(",", "").replace("-", "").isdigit() and len(val) < 5):
+                    # Avoid matching codes/ids that look like small numbers
+                    row_amount = a
+                    continue
+            row_desc_parts.append(val)
+
+        if row_date is None or row_amount is None:
+            continue
+
+        desc = " ".join(row_desc_parts).strip() or "Importado"
+        transactions.append({
+            "date": row_date,
+            "description": desc[:500],
+            "amount": abs(row_amount),
+            "type": "receita" if row_amount > 0 else "despesa",
+            "original_description": desc,
+        })
+
+    return transactions
 
 
 # =====================================================
