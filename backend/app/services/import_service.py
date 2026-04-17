@@ -96,28 +96,7 @@ def parse_ofx(content: bytes) -> List[Dict]:
 # XLSX PARSER
 # =====================================================
 
-def parse_xlsx(content: bytes) -> List[Dict]:
-    """Parse Excel/CSV bank statement (robust: multi-sheet, header detection, multiple bank formats)."""
-    try:
-        import pandas as pd
 
-        # Try reading all sheets (for XLSX); CSV reads as single DF
-        try:
-            all_sheets = pd.read_excel(io.BytesIO(content), header=None, sheet_name=None)
-        except Exception:
-            # Fallback: maybe CSV
-            all_sheets = {"Sheet1": pd.read_csv(io.BytesIO(content), header=None, sep=None, engine="python", encoding_errors="replace")}
-
-        all_transactions = []
-
-        for sheet_name, df_raw in all_sheets.items():
-            transactions = _extract_from_dataframe(df_raw)
-            all_transactions.extend(transactions)
-
-        return all_transactions
-    except Exception as e:
-        logger.error(f"XLSX parse error: {e}")
-        return []
 
 
 def _extract_from_dataframe(df_raw) -> List[Dict]:
@@ -951,8 +930,10 @@ def parse_file(content: bytes, filename: str) -> Tuple[List[Dict], str]:
 
     if ext == ".ofx" or ext == ".ofc":
         return parse_ofx(content), "ofx"
-    elif ext in (".xlsx", ".xls", ".csv"):
-        return parse_xlsx(content), "xlsx"
+    elif ext == ".csv":
+        return parse_xlsx(content, is_csv=True), "csv"
+    elif ext in (".xlsx", ".xls"):
+        return parse_xlsx(content, is_csv=False), "xlsx"
     elif ext == ".pdf":
         return parse_pdf(content), "pdf"
     elif ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"):
@@ -962,9 +943,15 @@ def parse_file(content: bytes, filename: str) -> Tuple[List[Dict], str]:
         if content[:4] == b"OFXH" or b"<OFX>" in content[:200]:
             return parse_ofx(content), "ofx"
         elif content[:4] == b"PK\x03\x04":  # ZIP = XLSX
-            return parse_xlsx(content), "xlsx"
+            return parse_xlsx(content, is_csv=False), "xlsx"
         elif content[:4] == b"%PDF":
             return parse_pdf(content), "pdf"
         else:
-            # Try as image
+            # Try as CSV first (text-based), then image as last resort
+            try:
+                text_sample = content[:500].decode("utf-8", errors="strict")
+                if any(sep in text_sample for sep in [";", ","]) and "\n" in text_sample:
+                    return parse_xlsx(content, is_csv=True), "csv"
+            except UnicodeDecodeError:
+                pass
             return parse_image(content), "image"
