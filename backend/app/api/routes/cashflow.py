@@ -114,24 +114,24 @@ async def predict_cashflow(
     for day_offset in range(days):
         proj_date = today + timedelta(days=day_offset)
         date_key = proj_date
-        
+
         daily_income = avg_daily_income
         daily_expense = avg_daily_expense
-        
+
         # Add subscriptions
         daily_expense += subscription_map.get(date_key, 0)
-        
+
         # Add installments (distributed monthly)
         for inst in installments:
             if inst.end_date and proj_date <= inst.end_date:
                 daily_expense += float(inst.installment_amount) / 30
-        
+
         running_balance += daily_income - daily_expense
-        
+
         if running_balance < 0 and negative_day is None:
             negative_day = day_offset
-        
-       projections.append({
+
+        projections.append({
             "date": date_key,
             "projected_income": round(daily_income, 2),
             "projected_expense": round(daily_expense, 2),
