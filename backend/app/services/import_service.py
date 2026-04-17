@@ -354,18 +354,199 @@ def _extract_by_content(df_raw) -> List[Dict]:
 # =====================================================
 
 def parse_pdf(content: bytes) -> List[Dict]:
-    """Parse PDF bank statement using PyMuPDF."""
+    """Parse PDF bank statement using PyMuPDF. Tries multiple strategies."""
     try:
         import fitz  # PyMuPDF
         doc = fitz.open(stream=content, filetype="pdf")
+
+        # Strategy 1: Extract as blocks (preserves layout - better for tabular statements)
+        block_transactions = []
         full_text = ""
         for page in doc:
-            full_text += page.get_text()
+            full_text += page.get_text() + "\n"
+            # Get blocks: each block is a paragraph/cell in the layout
+            blocks = page.get_text("blocks")
+            for block in blocks:
+                # block = (x0, y0, x1, y1, text, block_no, block_type)
+                block_text = block[4] if len(block) > 4 else ""
+                parsed = _extract_from_block(block_text)
+                if parsed:
+                    block_transactions.append(parsed)
 
-        return _extract_transactions_from_text(full_text)
+        if block_transactions:
+            logger.info(f"PDF parse: extracted {len(block_transactions)} transactions via blocks strategy")
+            return block_transactions
+
+        # Strategy 2: Multi-line extraction (date on one line, amount on nearby line)
+        multiline_transactions = _extract_multiline_transactions(full_text)
+        if multiline_transactions:
+            logger.info(f"PDF parse: extracted {len(multiline_transactions)} transactions via multiline strategy")
+            return multiline_transactions
+
+        # Strategy 3: Original single-line extraction (for PDFs with tabular text)
+        single_line = _extract_transactions_from_text(full_text)
+        logger.info(f"PDF parse: extracted {len(single_line)} transactions via single-line strategy")
+        return single_line
+
     except Exception as e:
         logger.error(f"PDF parse error: {e}")
         return []
+
+
+def _extract_from_block(block_text: str) -> Optional[Dict]:
+    """Extract a single transaction from a text block (cell/paragraph)."""
+    if not block_text or len(block_text.strip()) < 5:
+        return None
+
+    lines = [ln.strip() for ln in block_text.split("\n") if ln.strip()]
+    if not lines:
+        return None
+
+    # Find date
+    t_date = None
+    date_line_idx = None
+    for i, ln in enumerate(lines):
+        m = re.search(r"(\d{2}[/\-.]\d{2}[/\-.]\d{2,4})", ln)
+        if m:
+            d = _parse_date(m.group(1))
+            if d:
+                t_date = d
+                date_line_idx = i
+                break
+
+    if t_date is None:
+        return None
+
+    # Find amount (look for R$ or BR-formatted number)
+    amount = None
+    amount_line_idx = None
+    for i, ln in enumerate(lines):
+        m = re.search(r"(-?\s*R?\$?\s*\d{1,3}(?:[.\s]\d{3})*,\d{2})", ln)
+        if m:
+            a = _parse_amount(m.group(1))
+            if a is not None and a != 0:
+                amount = a
+                amount_line_idx = i
+                break
+
+    if amount is None:
+        return None
+
+    # Description: all other lines concatenated
+    desc_parts = []
+    for i, ln in enumerate(lines):
+        if i == date_line_idx or i == amount_line_idx:
+            continue
+        # Remove any date/amount remnants
+        clean = re.sub(r"\d{2}[/\-.]\d{2}[/\-.]\d{2,4}", "", ln)
+        clean = re.sub(r"-?\s*R?\$?\s*\d{1,3}(?:[.\s]\d{3})*,\d{2}", "", clean)
+        clean = clean.strip()
+        if clean and len(clean) > 2:
+            desc_parts.append(clean)
+
+    desc = " ".join(desc_parts).strip()[:500] or "Importado"
+
+    return {
+        "date": t_date,
+        "description": desc,
+        "amount": abs(amount),
+        "type": "receita" if amount > 0 else "despesa",
+        "original_description": desc,
+    }
+
+
+def _extract_multiline_transactions(text: str) -> List[Dict]:
+    """
+    Extract transactions where date and amount are on different lines but near each other.
+    Uses a sliding window: for each date found, looks for amount in the next N lines.
+    """
+    transactions = []
+    lines = [ln.strip() for ln in text.split("\n")]
+    date_pattern = re.compile(r"(\d{2}[/\-.]\d{2}[/\-.]\d{2,4})")
+    amount_pattern = re.compile(r"(-?\s*R?\$?\s*\d{1,3}(?:[.\s]\d{3})*,\d{2})")
+
+    WINDOW = 6  # Look up to 6 lines after the date
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        date_match = date_pattern.search(line)
+
+        if not date_match:
+            i += 1
+            continue
+
+        t_date = _parse_date(date_match.group(1))
+        if t_date is None:
+            i += 1
+            continue
+
+        # Look for amount in this line or the next WINDOW lines
+        amount = None
+        amount_line_offset = None
+        desc_lines = []
+
+        # Start from the current line (remove date from line to capture description)
+        current_clean = date_pattern.sub("", line).strip()
+
+        # Check amount in current line first
+        am = amount_pattern.search(current_clean)
+        if am:
+            a = _parse_amount(am.group(1))
+            if a is not None and a != 0:
+                amount = a
+                # Extract description from same line
+                current_clean = amount_pattern.sub("", current_clean).strip()
+                if current_clean:
+                    desc_lines.append(current_clean)
+
+        # If no amount yet, scan next lines
+        if amount is None:
+            if current_clean and len(current_clean) > 2:
+                desc_lines.append(current_clean)
+
+            for j in range(1, min(WINDOW + 1, len(lines) - i)):
+                next_line = lines[i + j]
+                if not next_line:
+                    continue
+
+                # If we find a new date, stop — this is the next transaction
+                if date_pattern.search(next_line) and not amount:
+                    break
+
+                am = amount_pattern.search(next_line)
+                if am:
+                    a = _parse_amount(am.group(1))
+                    if a is not None and a != 0:
+                        amount = a
+                        amount_line_offset = j
+                        # Capture the non-amount part as description
+                        cleaned = amount_pattern.sub("", next_line).strip()
+                        if cleaned and len(cleaned) > 2:
+                            desc_lines.append(cleaned)
+                        break
+                else:
+                    # No amount, add as description
+                    if len(next_line) > 2:
+                        desc_lines.append(next_line)
+
+        if amount is None:
+            i += 1
+            continue
+
+        desc = " ".join(desc_lines).strip()[:500] or "Importado"
+        transactions.append({
+            "date": t_date,
+            "description": desc,
+            "amount": abs(amount),
+            "type": "receita" if amount > 0 else "despesa",
+            "original_description": desc,
+        })
+
+        # Skip past this transaction
+        i += (amount_line_offset + 1) if amount_line_offset else 1
+
+    return transactions
 
 
 # =====================================================
